@@ -12,6 +12,7 @@ urlpatterns = [
     path('capsules/<int:capsule_id>/memories/',MemoryListAPIView.as_view(),name='memory-list'),
     path('capsules/<int:capsule_id>/memories/add/',MemoryCreateAPIView.as_view(),name='memory-create'),
     path('capsules/<int:capsule_id>/memories/<int:memory_id>/',MemoryDetailAPIView.as_view(),name='memory-detail'),
+    path('capsules/<int:capsule_id>/memories/all/',MemoryAllDetailAPIView.as_view(),name='memory-all-detail'),
 
     path('capsules/<int:capsule_id>/recipients/add/',RecipientCreateAPIView.as_view(),name='recipient-add'),
     path('capsules/<int:capsule_id>/collaborators/',CollaborationListAPIView.as_view(),name='collaborator-list'),

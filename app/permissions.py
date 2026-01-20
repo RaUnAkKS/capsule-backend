@@ -41,12 +41,7 @@ class CanViewCapsule(BasePermission):
         if not capsule:
             return False
         permission = get_user_permission(request.user,capsule)
-        if capsule.is_unlocked:
-            return (request.user.is_authenticated and
-                    (permission=='OWNER' or permission=='CONTRIBUTOR' or permission=='VIEWER'))
-        else:
-            return (request.user.is_authenticated and
-                    (permission=='OWNER' or permission=='CONTRIBUTOR'))
+        return (request.user.is_authenticated and(permission=='OWNER' or permission=='CONTRIBUTOR' or permission=='VIEWER'))
         
 class CanReact(BasePermission):
     def has_permission(self, request, view):

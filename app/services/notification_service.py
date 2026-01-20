@@ -15,4 +15,4 @@ def noti_reaction_add(requesting_user,capsule):
     users.discard(requesting_user)
     for user in users:
         Notification.objects.create(user=user,capsule=capsule,notification_type="REACTION",message=f"{requesting_user} is reacted on {capsule.title}")
-        
+    

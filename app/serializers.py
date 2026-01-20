@@ -54,9 +54,25 @@ class CapsuleListSerializer(serializers.ModelSerializer):
 
 class CapsuleDetailSerializer(serializers.ModelSerializer):
     creator = UserPublicSerializer()
+    user_role = serializers.SerializerMethodField()
+
     class Meta:
         model = Capsule
-        fields = ['id','title','description','theme','creator','unlock_type','unlock_date','is_unlocked','privacy_level','created_at']
+        fields = ['id','title','description','theme','creator','unlock_type','unlock_date','is_unlocked','privacy_level','created_at', 'user_role']
+
+    def get_user_role(self, obj):
+        request = self.context.get('request')
+        if request and request.user.is_authenticated:
+            try:
+                collab = Collaboration.objects.filter(capsule=obj, user=request.user).first()
+                if collab:
+                    return collab.permission
+            except Exception:
+                pass
+            
+            if obj.creator == request.user:
+                return 'OWNER'
+        return None
 
 class MemoryCreateSerializer(serializers.ModelSerializer):
     class Meta:

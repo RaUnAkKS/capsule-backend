@@ -13,7 +13,7 @@ from app.tasks.date_unlock import unlock_due_capsules
 from app.services.invite_service import accept_invite,decline_invite
 from app.services.reaction_add import reaction
 from rest_framework.pagination import PageNumberPagination
-# from .pagination import CapsulePagination
+from .pagination import CapsulePagination,MemoryCursorPagination
 from app.services.noti_file_change import mark_read,mark_all_read
 from datetime import timedelta
 from rest_framework.parsers import MultiPartParser, FormParser
@@ -44,7 +44,13 @@ class CapsuleListAPIView(APIView):
     permission_classes = [IsAuthenticated]
 
     def get(self,request):
-        capsules = Capsule.objects.filter(collab_capsule__user=request.user).distinct().order_by("-created_at")
+        search_term = request.query_params.get('search',None)
+        if search_term == 'Locked':
+            capsules = Capsule.objects.filter(collab_capsule__user=request.user,is_unlocked=False).distinct().order_by("-created_at")
+        elif search_term == 'Unlocked':
+            capsules = Capsule.objects.filter(collab_capsule__user=request.user,is_unlocked=True).distinct().order_by("-created_at")
+        else:
+            capsules = Capsule.objects.filter(collab_capsule__user=request.user).distinct().order_by("-created_at")
         
         paginator = PageNumberPagination()
         # Ensure we use the page size from settings if not overridden
@@ -63,7 +69,7 @@ class CapsuleDetailAPIView(APIView):
     def get(self,request,capsule_id):
         unlock_due_capsules()
         capsule = self.get_capsule()
-        serializer = CapsuleDetailSerializer(capsule)
+        serializer = CapsuleDetailSerializer(capsule, context={'request':request})
         return Response(serializer.data)
     
 class MemoryCreateAPIView(APIView):
@@ -88,6 +94,12 @@ class MemoryListAPIView(APIView):
     
     def get(self,request,capsule_id):
         capsule = self.get_capsule()
+        
+        # Security check: If locked and user is VIEWER, return empty list
+        permission = get_user_permission(request.user, capsule)
+        if not capsule.is_unlocked and permission == 'VIEWER':
+             return Response({'count': 0, 'next': None, 'previous': None, 'results': []})
+
         memories = capsule.memo_capsule.order_by('-created_at')
         
         paginator = PageNumberPagination()
@@ -103,17 +115,46 @@ class MemoryDetailAPIView(APIView):
 
     def get(self,request,capsule_id,memory_id):
         capsule = self.get_capsule()
+        
+        # Security check: specific memory access should also be blocked
+        permission = get_user_permission(request.user, capsule)
+        if not capsule.is_unlocked and permission == 'VIEWER':
+             return Response({"detail": "Capsule is locked"}, status=status.HTTP_403_FORBIDDEN)
         memory = get_object_or_404(capsule.memo_capsule, id=memory_id)
         serializer = MemoryDetailSerializer(memory, context={'request': request})
         return Response(serializer.data)
+
+class MemoryAllDetailAPIView(APIView):
     
+    permission_classes=[IsAuthenticated,CanViewCapsule]
+    def get_capsule(self):
+        return get_object_or_404(Capsule,id=self.kwargs['capsule_id'])
+    
+    def get(self,request,capsule_id):
+        capsule = self.get_capsule()
+        permission = get_user_permission(request.user, capsule)
+        if not capsule.is_unlocked and permission == 'VIEWER':
+             return Response({"detail": "Capsule is locked"}, status=status.HTTP_403_FORBIDDEN)
+        search_term = request.query_params.get('search',None)
+        if search_term:
+            memory = capsule.memo_capsule.filter(created_by__username__icontains=search_term).order_by('-created_at')
+        else:
+            memory = capsule.memo_capsule.all().order_by('-created_at')
+        paginator = MemoryCursorPagination()
+        result_page = paginator.paginate_queryset(memory,request)
+        serializer = MemoryDetailSerializer(result_page, many=True, context={'request': request})
+        return paginator.get_paginated_response(serializer.data)
+
 class RecipientCreateAPIView(APIView):
     permission_classes = [IsAuthenticated,IsCapsuleOwner]
     def get_capsule(self):
         return get_object_or_404(Capsule,id=self.kwargs['capsule_id'])
     
     def post(self,request,capsule_id):
+        
         capsule = self.get_capsule()
+        if capsule.privacy_level == 'PRIVATE':
+            return Response({"detail":"You can't invite recipient to private capsule"},status=status.HTTP_400_BAD_REQUEST)
         serializer = RecipientCreateSerializer(data=request.data,context={'capsule':capsule})
         if serializer.is_valid(raise_exception=True):
             serializer.save(capsule=capsule)
@@ -121,7 +162,7 @@ class RecipientCreateAPIView(APIView):
                 capsule = capsule,
                 user = serializer.validated_data['user'],
                 notification_type = 'INVITE',
-                message = f"You have been invited to view the capsule {capsule.title} by {capsule.creator.username}"
+                message = f"You have been invited to {serializer.validated_data['role']} the capsule {capsule.title} by {capsule.creator.username}"
             )
 
         return Response({"message":"Recipient invited"},status=status.HTTP_201_CREATED) 
@@ -168,9 +209,11 @@ class InviteListAPIView(APIView):
     permission_classes = [IsAuthenticated]
     def get(self,request):
         user=request.user
-        invites = Notification.objects.filter(user=user,notification_type="INVITE").order_by('-created_at')
-        serializer = NotificationSerializer(invites,many=True)
-        return Response(serializer.data)
+        invites = Notification.objects.filter(user=user,notification_type="INVITE",is_seen=False).order_by('-created_at')
+        pagination = MemoryCursorPagination()
+        result_page = pagination.paginate_queryset(invites,request)
+        serializer = NotificationSerializer(result_page,many=True)
+        return pagination.get_paginated_response(serializer.data)
 
 class InviteAcceptAPIView(APIView):
     permission_classes = [IsAuthenticated]
@@ -232,6 +275,12 @@ class ReactionsAPIView(APIView):
     
     def get(self,request,capsule_id):
         capsule=self.get_capsule()
+        
+        # Security check: If locked and user is VIEWER, return empty list
+        permission = get_user_permission(request.user, capsule)
+        if not capsule.is_unlocked and permission == 'VIEWER':
+             return Response({'count': 0, 'next': None, 'previous': None, 'results': []})
+
         reactions = Reaction.objects.filter(capsule=capsule).order_by('-created_at')
         
         # paginator = PageNumberPagination()
@@ -257,9 +306,17 @@ class NotificationListAPIView(APIView):
 
     def get(self,request):
         user = request.user
-        noti = Notification.objects.filter(user=user).order_by('-created_at')
-        serializer = NotificationSerializer(noti,many=True)
-        return Response(serializer.data)
+        search_term = request.query_params.get('search',None)
+        if search_term == 'Unread':
+            noti = Notification.objects.filter(user=user,is_seen=False).order_by('-created_at')
+        elif search_term == 'Read':
+            noti = Notification.objects.filter(user=user,is_seen=True).order_by('-created_at')
+        else:
+            noti = Notification.objects.filter(user=user).order_by('-created_at')
+        paginator = MemoryCursorPagination()
+        result_page = paginator.paginate_queryset(noti,request)
+        serializer = NotificationSerializer(result_page,many=True)
+        return paginator.get_paginated_response(serializer.data)
 
 class NotificationMarkAPIView(APIView):
     permission_classes=[IsAuthenticated]
